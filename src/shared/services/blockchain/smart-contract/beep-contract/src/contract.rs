@@ -3,9 +3,11 @@ use cosmwasm_std::entry_point;
 use cosmwasm_std::{to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 use cw2::set_contract_version;
 use execute::{
-    execute_add_supported_protocols, execute_add_supported_tokens, execute_create_intent,
-    execute_fill_intent, execute_remove_supported_protocols, execute_remove_supported_tokens,
-    execute_update_admin, execute_update_default_timeout_height, execute_withdraw_intent_fund,
+    execute_add_ibc_connection, execute_add_supported_protocols, execute_add_supported_tokens,
+    execute_create_intent, execute_fill_intent, execute_remove_ibc_connection,
+    execute_remove_supported_protocols, execute_remove_supported_tokens, execute_update_admin,
+    execute_update_default_timeout_height, execute_update_ibc_connection,
+    execute_withdraw_intent_fund,
 };
 
 use crate::error::ContractError;
@@ -34,7 +36,7 @@ pub fn instantiate(
     CONFIG.save(deps.storage, &config)?;
 
     Ok(Response::new()
-        .add_attribute("method", "instantiate")
+        .add_attribute("action", "instantiate")
         .add_attribute("admin", info.sender.to_string())
         .add_attribute(
             "default_timeout_height",
@@ -90,6 +92,19 @@ pub fn execute(
         ExecuteMsg::UpdateDefaultTimeoutHeight {
             default_timeout_height,
         } => execute_update_default_timeout_height(deps, info, default_timeout_height),
+        ExecuteMsg::AddIbcConnection {
+            chain_id,
+            port,
+            channel_id,
+        } => execute_add_ibc_connection(deps, info, chain_id, port, channel_id),
+        ExecuteMsg::UpdateIbcConnection {
+            chain_id,
+            port,
+            channel_id,
+        } => execute_update_ibc_connection(deps, info, chain_id, port, channel_id),
+        ExecuteMsg::RemoveIbcConnection { chain_id } => {
+            execute_remove_ibc_connection(deps, info, chain_id)
+        }
     }
 }
 
@@ -101,8 +116,8 @@ pub mod execute {
         ibc::{add_cw20_transfer_msg, add_native_transfer_msg},
         msg::IbcExecuteMsg,
         state::{
-            BeepCoin, Intent, IntentStatus, IntentType, ESCROW, IBC_CONNECTIONS, INTENTS,
-            USER_NONCE,
+            BeepCoin, Connection, Intent, IntentStatus, IntentType, ESCROW, IBC_CONNECTIONS,
+            INTENTS, USER_NONCE,
         },
     };
 
@@ -162,7 +177,7 @@ pub mod execute {
 
         Ok(Response::new()
             .add_messages(msgs)
-            .add_attribute("method", "create_intent")
+            .add_attribute("action", "create_intent")
             .add_attribute("intent_id", id)
             .add_attribute("status", "active"))
     }
@@ -196,7 +211,7 @@ pub mod execute {
         Ok(Response::new()
             .add_messages(msgs)
             .add_message(ibc_msg)
-            .add_attribute("method", "fill_intent")
+            .add_attribute("action", "fill_intent")
             .add_attribute("intent_id", intent_id)
             .add_attribute("executor", info.sender))
     }
@@ -266,7 +281,7 @@ pub mod execute {
         CONFIG.save(deps.storage, &config)?;
 
         Ok(Response::new()
-            .add_attribute("method", "execute_update_admin")
+            .add_attribute("action", "execute_update_admin")
             .add_attribute("old_admin", info.sender.to_string())
             .add_attribute("new_admin", new_admin.to_string()))
     }
@@ -291,7 +306,7 @@ pub mod execute {
         CONFIG.save(deps.storage, &config)?;
 
         Ok(Response::new()
-            .add_attribute("method", "execute_add_supported_tokens")
+            .add_attribute("action", "execute_add_supported_tokens")
             .add_attribute("status", "success"))
     }
 
@@ -313,7 +328,7 @@ pub mod execute {
         CONFIG.save(deps.storage, &config)?;
 
         Ok(Response::new()
-            .add_attribute("method", "execute_remove_supported_tokens")
+            .add_attribute("action", "execute_remove_supported_tokens")
             .add_attribute("status", "success"))
     }
 
@@ -337,7 +352,7 @@ pub mod execute {
         CONFIG.save(deps.storage, &config)?;
 
         Ok(Response::new()
-            .add_attribute("method", "execute_add_supported_protocols")
+            .add_attribute("action", "execute_add_supported_protocols")
             .add_attribute("status", "success"))
     }
 
@@ -359,7 +374,7 @@ pub mod execute {
         CONFIG.save(deps.storage, &config)?;
 
         Ok(Response::new()
-            .add_attribute("method", "execute_remove_supported_protocols")
+            .add_attribute("action", "execute_remove_supported_protocols")
             .add_attribute("status", "success"))
     }
 
@@ -378,7 +393,86 @@ pub mod execute {
         CONFIG.save(deps.storage, &config)?;
 
         Ok(Response::new()
-            .add_attribute("method", "execute_update_default_timeout_height")
+            .add_attribute("action", "execute_update_default_timeout_height")
+            .add_attribute("status", "success"))
+    }
+
+    pub fn execute_add_ibc_connection(
+        deps: DepsMut,
+        info: MessageInfo,
+        chain_id: String,
+        port: String,
+        channel_id: String,
+    ) -> Result<Response, ContractError> {
+        let config = CONFIG.load(deps.storage)?;
+
+        if info.sender != config.admin {
+            return Err(ContractError::Unauthorized {});
+        }
+
+        IBC_CONNECTIONS.save(
+            deps.storage,
+            &chain_id.clone(),
+            &Connection {
+                chain_id: chain_id.clone(),
+                port,
+                channel_id,
+            },
+        )?;
+
+        Ok(Response::new()
+            .add_attribute("action", "execute_add_ibc_connection")
+            .add_attribute("chain_id", chain_id)
+            .add_attribute("status", "success"))
+    }
+
+    pub fn execute_update_ibc_connection(
+        deps: DepsMut,
+        info: MessageInfo,
+        chain_id: String,
+        port: Option<String>,
+        channel_id: Option<String>,
+    ) -> Result<Response, ContractError> {
+        let config = CONFIG.load(deps.storage)?;
+
+        if info.sender != config.admin {
+            return Err(ContractError::Unauthorized {});
+        }
+
+        let mut connection = IBC_CONNECTIONS.load(deps.storage, &chain_id)?;
+
+        if port.is_some() {
+            connection.port = port.unwrap();
+        }
+
+        if channel_id.is_some() {
+            connection.channel_id = channel_id.unwrap();
+        }
+
+        IBC_CONNECTIONS.save(deps.storage, &chain_id, &connection)?;
+
+        Ok(Response::new()
+            .add_attribute("action", "execute_update_ibc_connection")
+            .add_attribute("chain_id", chain_id)
+            .add_attribute("status", "success"))
+    }
+
+    pub fn execute_remove_ibc_connection(
+        deps: DepsMut,
+        info: MessageInfo,
+        chain_id: String,
+    ) -> Result<Response, ContractError> {
+        let config = CONFIG.load(deps.storage)?;
+
+        if info.sender != config.admin {
+            return Err(ContractError::Unauthorized {});
+        }
+
+        IBC_CONNECTIONS.remove(deps.storage, &chain_id);
+
+        Ok(Response::new()
+            .add_attribute("action", "execute_remove_ibc_connection")
+            .add_attribute("chain_id", chain_id)
             .add_attribute("status", "success"))
     }
 

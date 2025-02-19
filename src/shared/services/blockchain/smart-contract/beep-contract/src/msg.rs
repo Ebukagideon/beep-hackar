@@ -50,6 +50,19 @@ pub enum ExecuteMsg {
     UpdateDefaultTimeoutHeight {
         default_timeout_height: u64,
     },
+    AddIbcConnection {
+        chain_id: String,
+        port: String,
+        channel_id: String,
+    },
+    UpdateIbcConnection {
+        chain_id: String,
+        port: Option<String>,
+        channel_id: Option<String>,
+    },
+    RemoveIbcConnection {
+        chain_id: String,
+    },
 }
 
 #[cw_serde]

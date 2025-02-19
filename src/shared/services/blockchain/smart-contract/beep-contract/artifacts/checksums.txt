@@ -1,0 +1,1 @@
+a29cfc199dd42e1f00a2f9da0df7974fd68b8a372baed6322de2dcdcdd2eb713  beep_contract.wasm
