@@ -31,6 +31,7 @@ pub struct Intent {
     pub status: IntentStatus,
     pub created_at: u64,
     pub timeout: u64,
+    pub tip: BeepCoin,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -85,6 +86,5 @@ pub struct FillIntent {
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const IBC_CONNECTIONS: Map<&str, Connection> = Map::new("connections"); // chain_id -> Connection
 pub const INTENTS: Map<&str, Intent> = Map::new("intents"); // intent_id -> Intent
-pub const USER_ESCROW: Map<(&Addr, &str), Vec<BeepCoin>> = Map::new("user_escrow"); // (address, intent_id) -> Bag of money
-pub const EXECUTOR_ESCROW: Map<(&Addr, &str), Vec<BeepCoin>> = Map::new("executor_escrow"); // (address, intent_id) -> Bag of money
-pub const USER_NONCE: Map<Addr, u128> = Map::new("user_nonce");
+pub const ESCROW: Map<(&Addr, &str), Vec<BeepCoin>> = Map::new("escrow"); // (address, intent_id) -> Bag of fund
+pub const USER_NONCE: Map<&Addr, u128> = Map::new("user_nonce");

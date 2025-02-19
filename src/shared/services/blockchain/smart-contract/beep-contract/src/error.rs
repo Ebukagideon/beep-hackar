@@ -12,9 +12,6 @@ pub enum ContractError {
     #[error("Unimplemented")]
     Unimplemented {},
 
-    #[error("Invalid funds")]
-    InvalidFunds {},
-
     #[error("Unsupported token")]
     UnsupportedToken {},
 

@@ -51,10 +51,11 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::CreateIntent {
-            input_tokens,
             intent_type,
+            input_tokens,
             target_chain_id,
             timeout,
+            tip,
         } => execute_create_intent(
             deps,
             env,
@@ -63,6 +64,7 @@ pub fn execute(
             input_tokens,
             target_chain_id,
             timeout,
+            tip,
         ),
         ExecuteMsg::FillIntent {
             intent_id,
@@ -92,15 +94,15 @@ pub fn execute(
 }
 
 pub mod execute {
-    use cosmwasm_std::{Addr, CosmosMsg, IbcMsg, IbcTimeout, StdError, Uint128};
+    use cosmwasm_std::{Addr, CosmosMsg, IbcMsg, IbcTimeout, StdError, Uint128, WasmMsg};
     use sha2::{Digest, Sha256};
 
     use crate::{
         ibc::{add_cw20_transfer_msg, add_native_transfer_msg},
         msg::IbcExecuteMsg,
         state::{
-            BeepCoin, Intent, IntentStatus, IntentType, EXECUTOR_ESCROW, IBC_CONNECTIONS, INTENTS,
-            USER_ESCROW, USER_NONCE,
+            BeepCoin, Intent, IntentStatus, IntentType, ESCROW, IBC_CONNECTIONS, INTENTS,
+            USER_NONCE,
         },
     };
 
@@ -114,25 +116,27 @@ pub mod execute {
         input_tokens: Vec<BeepCoin>,
         target_chain_id: String,
         timeout: Option<u64>,
+        tip: BeepCoin,
     ) -> Result<Response, ContractError> {
         // Validate parameters
         let config = CONFIG.load(deps.storage)?;
         let nonce = USER_NONCE
-            .load(deps.storage, info.sender.clone())
+            .load(deps.storage, &info.sender.clone())
             .unwrap_or(0);
 
         let id = generate_intent_id(info.sender.clone(), nonce);
 
-        // Validate funds
-        if info.funds.is_empty() {
-            return Err(ContractError::InvalidFunds {});
-        }
-
-        // Validate all input tokens are supported
-        validate_input_tokens(&deps, &env, &info, &input_tokens)?;
-
         // Validate intent type and associated parameters
         validate_intent_type(&intent_type, &config)?;
+
+        // Validate all input tokens are supported
+        let validate_msg = validate_tokens(&deps, &env, &info, &input_tokens)?;
+
+        // Validate tip
+        let tip_msg = validate_tokens(&deps, &env, &info, &[tip.clone()])?;
+
+        // transfer tokens to contract
+        let msgs = [validate_msg, tip_msg].concat();
 
         // Create and save intent
         let intent = Intent {
@@ -142,20 +146,22 @@ pub mod execute {
             intent_type,
             executor: None,
             status: IntentStatus::Active,
-            created_at: env.block.time.seconds(),
+            created_at: env.block.height,
             origin_chain_id: env.block.chain_id,
             target_chain_id,
             timeout: timeout.unwrap_or(env.block.height + config.default_timeout_height),
+            tip,
         };
         INTENTS.save(deps.storage, &id, &intent)?;
 
         // Escrow tokens
-        USER_ESCROW.save(deps.storage, (&info.sender, &id), &input_tokens)?;
+        ESCROW.save(deps.storage, (&info.sender, &id), &input_tokens)?;
 
         // Update nonce
-        USER_NONCE.save(deps.storage, info.sender, &(nonce + 1))?;
+        USER_NONCE.save(deps.storage, &info.sender, &(nonce + 1))?;
 
         Ok(Response::new()
+            .add_messages(msgs)
             .add_attribute("method", "create_intent")
             .add_attribute("intent_id", id)
             .add_attribute("status", "active"))
@@ -170,10 +176,10 @@ pub mod execute {
         intent_type: IntentType,
     ) -> Result<Response, ContractError> {
         // Validate tokens were attached
-        let tokens = validate_filling(&deps, &env, &info, &intent_id, &intent_type)?;
+        let (tokens, msgs) = validate_filling(&deps, &env, &info, &intent_id, &intent_type)?;
 
         // Escrow tokens
-        EXECUTOR_ESCROW.save(deps.storage, (&info.sender, &intent_id), &tokens)?;
+        ESCROW.save(deps.storage, (&info.sender, &intent_id), &tokens)?;
 
         // Create IBC packet
         let timeout = IbcTimeout::with_timestamp(env.block.time.plus_minutes(2));
@@ -188,6 +194,7 @@ pub mod execute {
         };
 
         Ok(Response::new()
+            .add_messages(msgs)
             .add_message(ibc_msg)
             .add_attribute("method", "fill_intent")
             .add_attribute("intent_id", intent_id)
@@ -201,9 +208,9 @@ pub mod execute {
         intent_id: String,
     ) -> Result<Response, ContractError> {
         // check if intent
-        let intent = INTENTS.load(deps.storage, &intent_id)?;
+        let mut intent = INTENTS.load(deps.storage, &intent_id)?;
 
-        if env.block.height < intent.created_at + intent.timeout {
+        if env.block.height < intent.timeout {
             return Err(ContractError::Std(StdError::generic_err(
                 "Intent has not expired",
             )));
@@ -213,7 +220,11 @@ pub mod execute {
             return Err(ContractError::Unauthorized {});
         }
 
-        let tokens = USER_ESCROW.load(deps.storage, (&info.sender, &intent_id))?;
+        // update intent
+        intent.status = IntentStatus::Expired;
+        INTENTS.save(deps.storage, &intent_id, &intent)?;
+
+        let tokens = ESCROW.load(deps.storage, (&info.sender, &intent_id))?;
         let mut messages: Vec<CosmosMsg> = vec![];
 
         for token in tokens {
@@ -232,11 +243,14 @@ pub mod execute {
             }
         }
 
+        // remove funds from escrow
+        ESCROW.remove(deps.storage, (&info.sender, &intent_id));
+
         Ok(Response::new()
             .add_messages(messages)
             .add_attribute("action", "withdraw_intent_fund"))
     }
-    
+
     pub fn execute_update_admin(
         deps: DepsMut,
         info: MessageInfo,
@@ -377,16 +391,17 @@ pub mod execute {
         hasher.update(input.as_bytes());
         let result = hasher.finalize();
 
-        format!("beep1{}", hex::encode(&result[..20]))
+        format!("intent{}", hex::encode(&result[..20]))
     }
 
-    fn validate_input_tokens(
+    fn validate_tokens(
         deps: &DepsMut,
         env: &Env,
         info: &MessageInfo,
         input_tokens: &[BeepCoin],
-    ) -> Result<(), ContractError> {
+    ) -> Result<Vec<CosmosMsg>, ContractError> {
         let config = CONFIG.load(deps.storage)?;
+        let mut msg: Vec<CosmosMsg> = vec![];
         for token in input_tokens {
             if !config.supported_tokens.contains(&token.token) {
                 return Err(ContractError::UnsupportedToken {});
@@ -395,11 +410,18 @@ pub mod execute {
             if token.is_native {
                 validate_native_token_payment(info, &token.token, token.amount)?;
             } else {
-                validate_cw20_token_payment(&deps.as_ref(), env, info, &token.token, token.amount)?;
+                let transfer_from_msg = validate_cw20_token_payment(
+                    &deps.as_ref(),
+                    env,
+                    info,
+                    &token.token,
+                    token.amount,
+                )?;
+                msg = [msg.clone(), transfer_from_msg].concat();
             }
         }
 
-        Ok(())
+        Ok(msg)
     }
 
     fn validate_native_token_payment(
@@ -440,7 +462,7 @@ pub mod execute {
         info: &MessageInfo,
         token_address: &str,
         required_amount: Uint128,
-    ) -> StdResult<()> {
+    ) -> StdResult<Vec<CosmosMsg>> {
         // Query token balance
         let balance: cw20::BalanceResponse = deps.querier.query_wasm_smart(
             token_address,
@@ -474,7 +496,22 @@ pub mod execute {
             )));
         }
 
-        Ok(())
+        let mut messages: Vec<CosmosMsg> = vec![];
+
+        messages.push(
+            WasmMsg::Execute {
+                contract_addr: token_address.to_string(),
+                msg: to_json_binary(&cw20::Cw20ExecuteMsg::TransferFrom {
+                    owner: info.sender.to_string(),
+                    recipient: env.contract.address.to_string(),
+                    amount: required_amount,
+                })?,
+                funds: vec![],
+            }
+            .into(),
+        );
+
+        Ok(messages)
     }
 
     fn validate_intent_type(
@@ -500,10 +537,12 @@ pub mod execute {
         info: &MessageInfo,
         intent_id: &str,
         intent_type: &IntentType,
-    ) -> Result<Vec<BeepCoin>, ContractError> {
-        let mut tokens = EXECUTOR_ESCROW
+    ) -> Result<(Vec<BeepCoin>, Vec<CosmosMsg>), ContractError> {
+        let mut tokens = ESCROW
             .load(deps.storage, (&info.sender, intent_id))
             .unwrap_or_default();
+        let mut msgs = vec![];
+
         match intent_type {
             IntentType::Swap { output_tokens } => {
                 for token in output_tokens {
@@ -524,13 +563,15 @@ pub mod execute {
                             ))));
                         }
                     } else {
-                        validate_cw20_token_payment(
+                        let transfer_from_msg = validate_cw20_token_payment(
                             &deps.as_ref(),
                             env,
                             info,
                             &token.token,
                             token.amount,
                         )?;
+
+                        msgs = [msgs, transfer_from_msg].concat();
                     }
 
                     // Add token to escrow
@@ -544,7 +585,7 @@ pub mod execute {
             _ => return Err(ContractError::Unimplemented {}),
         }
 
-        Ok(tokens)
+        Ok((tokens, msgs))
     }
 }
 
@@ -559,15 +600,21 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::ListIntents { start_after, limit } => {
             to_json_binary(&query::query_list_intents(deps, start_after, limit)?)
         }
+        QueryMsg::GetUserNonce { address } => {
+            to_json_binary(&query::query_get_user_nonce(deps, address)?)
+        }
     }
 }
 
 pub mod query {
+    use cosmwasm_std::Addr;
     use cw_storage_plus::Bound;
 
     use crate::{
-        msg::{ConfigResponse, ConnectionResponse, IntentResponse, IntentsResponse},
-        state::{Intent, CONFIG, IBC_CONNECTIONS, INTENTS},
+        msg::{
+            ConfigResponse, ConnectionResponse, IntentResponse, IntentsResponse, UserNonceResponse,
+        },
+        state::{Intent, CONFIG, IBC_CONNECTIONS, INTENTS, USER_NONCE},
     };
 
     use super::*;
@@ -616,6 +663,11 @@ pub mod query {
             .collect();
 
         Ok(IntentsResponse { intents: intents? })
+    }
+
+    pub fn query_get_user_nonce(deps: Deps, address: Addr) -> StdResult<UserNonceResponse> {
+        let nonce = USER_NONCE.load(deps.storage, &address)?;
+        Ok(UserNonceResponse { nonce })
     }
 }
 

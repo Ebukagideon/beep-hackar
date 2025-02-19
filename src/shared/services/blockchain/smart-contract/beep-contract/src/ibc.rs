@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::msg::IbcExecuteMsg;
-use crate::state::{FillIntent, IntentStatus, IntentType, EXECUTOR_ESCROW, INTENTS, USER_ESCROW};
+use crate::state::{FillIntent, IntentStatus, IntentType, ESCROW, INTENTS};
 use crate::ContractError;
 
 pub const IBC_VERSION: &str = "beep-0.1.0";
@@ -156,7 +156,7 @@ pub fn ibc_packet_ack(
                     }
 
                     // Delete escrow
-                    EXECUTOR_ESCROW.remove(deps.storage, (&intent.executor.unwrap(), &intent.id));
+                    ESCROW.remove(deps.storage, (&intent.executor.unwrap(), &intent.id));
                 }
                 _ => return Err(ContractError::Unimplemented {}),
             }
@@ -186,7 +186,7 @@ pub fn ibc_packet_timeout(
     let mut messages: Vec<CosmosMsg> = vec![];
 
     // return funds to executor
-    let tokens = EXECUTOR_ESCROW.load(deps.storage, (&filler.executor, &filler.intent_id))?;
+    let tokens = ESCROW.load(deps.storage, (&filler.executor, &filler.intent_id))?;
 
     for token in tokens {
         if token.is_native {
@@ -260,12 +260,27 @@ fn execute_ibc_fill_intent(
                 }
             }
 
+            // transfer tip to executor
+            if intent.tip.is_native {
+                messages.push(add_native_transfer_msg(
+                    &intent.tip.token,
+                    &executor,
+                    intent.tip.amount,
+                )?);
+            } else {
+                messages.push(add_cw20_transfer_msg(
+                    &intent.tip.token,
+                    &executor,
+                    intent.tip.amount,
+                )?);
+            }
+
             // Assign executor
             intent.executor = Some(executor);
             INTENTS.save(deps.storage, &intent_id, &intent)?;
 
             // Delete escrow
-            USER_ESCROW.remove(deps.storage, (&intent.clone().creator, &intent.id));
+            ESCROW.remove(deps.storage, (&intent.clone().creator, &intent.id));
 
             let ack_data = to_json_binary(&intent_id)?;
             Ok(IbcReceiveResponse::new(StdAck::success(ack_data))
