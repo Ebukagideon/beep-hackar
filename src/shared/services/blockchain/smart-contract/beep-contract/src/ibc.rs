@@ -11,7 +11,7 @@ use crate::msg::IbcExecuteMsg;
 use crate::state::{FillIntent, IntentStatus, IntentType, ESCROW, INTENTS};
 use crate::ContractError;
 
-pub const IBC_VERSION: &str = "beep-0.1.0";
+pub const IBC_VERSION: &str = "beep-1";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum IbcAcknowledgement {

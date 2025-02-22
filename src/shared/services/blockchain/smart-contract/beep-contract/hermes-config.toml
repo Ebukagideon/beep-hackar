@@ -1,0 +1,46 @@
+[global]
+log_level = 'info'
+
+[[chains]]
+id = 'osmosis-local-1'
+rpc_addr = 'http://localhost:26657'
+grpc_addr = 'http://localhost:9090'
+event_source = { mode = 'push', url = 'ws://localhost:26657/websocket', batch_delay = '200ms' }
+rpc_timeout = '10s'
+account_prefix = 'osmo'
+key_name = 'chain-a'
+address_type = { derivation = 'cosmos' }
+store_prefix = 'ibc'
+default_gas = 5000000
+max_gas = 15000000
+gas_price = { price = 0.0026, denom = 'uosmo' }
+gas_multiplier = 1.1
+max_msg_num = 20
+max_tx_size = 209715
+clock_drift = '20s'
+max_block_time = '10s'
+trusting_period = '1s'
+memo_prefix = 'Beep Intent:'
+trust_threshold = { numerator = '1', denominator = '3' }
+
+[[chains]]
+id = 'osmosis-local-2'
+rpc_addr = 'http://localhost:27657'
+grpc_addr = 'http://localhost:9091'
+event_source = { mode = 'push', url = 'ws://localhost:27657/websocket', batch_delay = '200ms' }
+rpc_timeout = '10s'
+account_prefix = 'osmo'
+key_name = 'chain-b'
+address_type = { derivation = 'cosmos' }
+store_prefix = 'ibc'
+default_gas = 5000000
+max_gas = 15000000
+gas_price = { price = 0.0026, denom = 'uosmo' }
+gas_multiplier = 1.1
+max_msg_num = 20
+max_tx_size = 209715
+clock_drift = '20s'
+max_block_time = '10s'
+trusting_period = '1s'
+memo_prefix = 'Beep Intent:'
+trust_threshold = { numerator = '1', denominator = '3' }
