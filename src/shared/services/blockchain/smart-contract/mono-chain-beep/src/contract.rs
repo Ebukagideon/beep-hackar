@@ -99,9 +99,9 @@ pub mod execute {
         let id = generate_intent_id(info.sender.clone(), nonce);
 
         validate_intent_type(&intent_type, &config)?;
-        let validate_msg = validate_tokens(&deps, &env, &info, &input_tokens).unwrap_or_default();
-        let tip_msg = validate_tokens(&deps, &env, &info, &[tip.clone()]).unwrap_or_default();
-        let msgs = [validate_msg, tip_msg].concat();
+        let validate_msg = validate_tokens(&deps, &env, &info, &input_tokens).unwrap();
+        let tip_msg = validate_tokens(&deps, &env, &info, &[tip.clone()]).unwrap();
+        let msgs = [validate_msg.clone(), tip_msg.clone()].concat();
 
         let intent = Intent {
             id: id.clone(),
@@ -120,7 +120,7 @@ pub mod execute {
         USER_NONCE.save(deps.storage, &info.sender, &(nonce + 1))?;
 
         Ok(Response::new()
-            .add_messages(msgs)
+            .add_messages(msgs.clone())
             .add_attribute("action", "create_intent")
             .add_attribute("intent_id", id)
             .add_attribute("status", "active"))
@@ -378,7 +378,10 @@ pub mod execute {
             IntentType::Swap { output_tokens } => {
                 for token in output_tokens {
                     if !config.supported_tokens.contains(&token.token) {
-                        return Err(StdError::generic_err("Unsupported tokens"));
+                        return Err(StdError::generic_err(format!(
+                            "Unsupported tokens used. Supplied token: {:?}, Supported tokens: {:?}",
+                            token.token, config.supported_tokens
+                        )));
                     }
                 }
             }
@@ -395,7 +398,7 @@ pub mod execute {
     ) -> StdResult<Vec<CosmosMsg>> {
         let mut tokens = ESCROW
             .load(deps.storage, (&info.sender, intent_id))
-            .unwrap_or_default();
+            .unwrap();
         let intent = INTENTS.load(deps.storage, intent_id)?;
         let mut msgs = vec![];
 
@@ -427,7 +430,7 @@ pub mod execute {
                             token.amount,
                         )?;
 
-                        msgs = [msgs, transfer_from_msg].concat();
+                        msgs.push(transfer_from_msg);
                     }
 
                     // Add token to escrow
@@ -470,10 +473,8 @@ pub mod execute {
         let mut msg: Vec<CosmosMsg> = vec![];
         for token in input_tokens {
             if !config.supported_tokens.contains(&token.token) {
-                // return Err(ContractError::UnsupportedToken {});
-
                 return Err(ContractError::Std(StdError::generic_err(
-                    "Unsopperted token: {}",
+                    "Unsupported token: {}",
                 )));
             }
 
@@ -487,7 +488,7 @@ pub mod execute {
                     &token.token,
                     token.amount,
                 )?;
-                msg = [msg.clone(), transfer_from_msg].concat();
+                msg.push(transfer_from_msg);
             }
         }
 
@@ -515,14 +516,6 @@ pub mod execute {
             )));
         }
 
-        // Check if excess amount was sent
-        if sent_amount > required_amount {
-            return Err(StdError::generic_err(format!(
-                "Excess native token sent. Required: {}, Sent: {}",
-                required_amount, sent_amount
-            )));
-        }
-
         Ok(())
     }
 
@@ -532,7 +525,7 @@ pub mod execute {
         info: &MessageInfo,
         token_address: &str,
         required_amount: Uint128,
-    ) -> StdResult<Vec<CosmosMsg>> {
+    ) -> StdResult<CosmosMsg> {
         // Query token balance
         let balance: cw20::BalanceResponse = deps.querier.query_wasm_smart(
             token_address,
@@ -567,19 +560,16 @@ pub mod execute {
         }
 
         // move funds to contract
-        let mut messages: Vec<CosmosMsg> = vec![];
-        messages.push(
-            WasmMsg::Execute {
-                contract_addr: token_address.to_string(),
-                msg: to_json_binary(&cw20::Cw20ExecuteMsg::TransferFrom {
-                    owner: info.sender.to_string(),
-                    recipient: env.contract.address.to_string(),
-                    amount: required_amount,
-                })?,
-                funds: vec![],
-            }
-            .into(),
-        );
+        let messages: CosmosMsg = (WasmMsg::Execute {
+            contract_addr: token_address.to_string(),
+            msg: to_json_binary(&cw20::Cw20ExecuteMsg::TransferFrom {
+                owner: info.sender.to_string(),
+                recipient: env.contract.address.to_string(),
+                amount: required_amount,
+            })?,
+            funds: vec![],
+        })
+        .into();
 
         Ok(messages)
     }
@@ -720,7 +710,7 @@ pub mod execute {
             assert!(result.is_err());
             assert_eq!(
                 result.unwrap_err(),
-                StdError::generic_err("Unsupported tokens")
+                StdError::generic_err("Unsupported tokens used. Supplied token: \"token3\", Supported tokens: [\"token1\", \"token2\"]")
             );
         }
 
@@ -797,6 +787,135 @@ pub mod execute {
             // Verify nonce incremented
             let nonce = USER_NONCE.load(&deps.storage, &info.sender).unwrap();
             assert_eq!(nonce, 1);
+        }
+
+        #[test]
+        fn test_execute_create_intent_with_cw20_tokens() {
+            let mut deps = mock_dependencies();
+            let env = mock_env();
+            let info = message_info(&Addr::unchecked("creator"), &[]);
+
+            // Set up initial config
+            let config = Config {
+                admin: info.sender.clone(),
+                supported_tokens: vec!["cw20_token".to_string()],
+                default_timeout_height: 20,
+                supported_protocols: vec!["protocol".to_string()],
+            };
+            CONFIG.save(&mut deps.storage, &config).unwrap();
+
+            // Set up initial user nonce
+            USER_NONCE
+                .save(&mut deps.storage, &info.sender, &0)
+                .unwrap();
+
+            let intent_type = IntentType::Swap {
+                output_tokens: vec![ExpectedToken {
+                    token: "cw20_token".to_string(),
+                    is_native: false,
+                    amount: Uint128::new(100),
+                    target_address: None,
+                }],
+            };
+            let input_tokens = vec![BeepCoin {
+                token: "cw20_token".to_string(),
+                amount: Uint128::new(1000),
+                is_native: false,
+            }];
+            let timeout = Some(2);
+            let tip = BeepCoin {
+                token: "cw20_token".to_string(),
+                amount: Uint128::new(10),
+                is_native: false,
+            };
+
+            // Mock balance and allowance queries for CW20 tokens
+            let cw20_token_address = String::from("cw20_token");
+
+            // Clone necessary variables to avoid moving them into the closure
+            let cw20_token_address_clone = cw20_token_address.clone();
+            let info_sender_clone = info.sender.clone();
+
+            // Mock the balance and allowance queries
+            deps.querier.update_wasm(move |query| {
+                let cw20_token_address = cw20_token_address_clone.clone();
+                let info_sender = info_sender_clone.clone();
+                let env = mock_env();
+
+                match query {
+                    WasmQuery::Smart { contract_addr, msg } => {
+                        if contract_addr == &cw20_token_address {
+                            if let Ok(cw20::Cw20QueryMsg::Balance { address }) = from_json(&msg) {
+                                if address == info_sender.to_string() {
+                                    return SystemResult::Ok(ContractResult::Ok(
+                                        to_json_binary(&cw20::BalanceResponse {
+                                            balance: Uint128::from(1000u128),
+                                        })
+                                        .unwrap(),
+                                    ));
+                                }
+                            } else if let Ok(cw20::Cw20QueryMsg::Allowance { owner, spender }) =
+                                from_json(&msg)
+                            {
+                                if owner == info_sender.to_string()
+                                    && spender == env.contract.address.to_string()
+                                {
+                                    return SystemResult::Ok(ContractResult::Ok(
+                                        to_json_binary(&cw20::AllowanceResponse {
+                                            allowance: Uint128::from(1000u128),
+                                            expires: Expiration::Never {},
+                                        })
+                                        .unwrap(),
+                                    ));
+                                }
+                            }
+                        }
+                        SystemResult::Err(SystemError::UnsupportedRequest {
+                            kind: "".to_string(),
+                        })
+                    }
+                    _ => SystemResult::Err(SystemError::UnsupportedRequest {
+                        kind: "".to_string(),
+                    }),
+                }
+            });
+
+            let res = execute_create_intent(
+                deps.as_mut(),
+                env.clone(),
+                info.clone(),
+                intent_type.clone(),
+                input_tokens.clone(),
+                timeout,
+                tip.clone(),
+            )
+            .unwrap();
+
+            // Verify the response attributes
+            assert_eq!(res.attributes.len(), 3);
+            assert_eq!(res.attributes[0].key, "action");
+            assert_eq!(res.attributes[0].value, "create_intent");
+            assert_eq!(res.attributes[1].key, "intent_id");
+            assert_eq!(res.attributes[2].key, "status");
+            assert_eq!(res.attributes[2].value, "active");
+
+            // Verify intent saved in storage
+            let intent_id = res.attributes[1].value.clone();
+            let saved_intent = INTENTS.load(&deps.storage, &intent_id).unwrap();
+            assert_eq!(saved_intent.creator, info.sender);
+            assert_eq!(saved_intent.input_tokens, input_tokens);
+            assert_eq!(saved_intent.intent_type, intent_type);
+            assert_eq!(saved_intent.status, IntentStatus::Active);
+            assert_eq!(saved_intent.created_at, env.block.height);
+            assert_eq!(saved_intent.timeout, env.block.height + 2);
+            assert_eq!(saved_intent.tip, tip);
+
+            // Verify nonce incremented
+            let nonce = USER_NONCE.load(&deps.storage, &info.sender).unwrap();
+            assert_eq!(nonce, 1);
+
+            // println!("Msgs: {:?}", res.messages);
+            // println!("Atr: {:?}", res.attributes);
         }
 
         #[test]
@@ -911,6 +1030,24 @@ pub mod execute {
                 },
             };
             INTENTS.save(&mut deps.storage, "intent1", &intent).unwrap();
+            ESCROW
+                .save(
+                    &mut deps.storage,
+                    (&info.sender, "intent1"),
+                    &vec![
+                        BeepCoin {
+                            token: "token".to_string(),
+                            amount: Uint128::new(10),
+                            is_native: true,
+                        },
+                        BeepCoin {
+                            token: "token".to_string(),
+                            amount: Uint128::new(1000),
+                            is_native: true,
+                        },
+                    ],
+                )
+                .unwrap();
 
             // Validate filling
             let result = validate_filling(
@@ -1011,12 +1148,24 @@ pub mod execute {
             };
             INTENTS.save(&mut deps.storage, "intent1", &intent).unwrap();
 
-            // Set up initial escrow
+            // Set up escrow
             ESCROW
                 .save(
                     &mut deps.storage,
                     (&Addr::unchecked("creator"), "intent1"),
                     &intent.input_tokens,
+                )
+                .unwrap();
+
+            ESCROW
+                .save(
+                    &mut deps.storage,
+                    (&Addr::unchecked("executor"), "intent1"),
+                    &vec![BeepCoin {
+                        token: "token".to_string(),
+                        is_native: true,
+                        amount: Uint128::new(1000),
+                    }],
                 )
                 .unwrap();
 
@@ -1126,12 +1275,24 @@ pub mod execute {
             };
             INTENTS.save(&mut deps.storage, "intent2", &intent).unwrap();
 
-            // Set up initial escrow
+            // Set up escrow
             ESCROW
                 .save(
                     &mut deps.storage,
                     (&Addr::unchecked("creator"), "intent2"),
                     &intent.input_tokens,
+                )
+                .unwrap();
+
+            ESCROW
+                .save(
+                    &mut deps.storage,
+                    (&Addr::unchecked("executor"), "intent2"),
+                    &vec![BeepCoin {
+                        token: "cw20_token".to_string(),
+                        is_native: false,
+                        amount: Uint128::new(1000),
+                    }],
                 )
                 .unwrap();
 
@@ -2141,7 +2302,8 @@ mod tests {
     use crate::{
         contract::query::{query_config, query_get_user_nonce, query_intent, query_list_intents},
         state::{
-            BeepCoin, Config, ExpectedToken, Intent, IntentStatus, IntentType, CONFIG, INTENTS, USER_NONCE,
+            BeepCoin, Config, ExpectedToken, Intent, IntentStatus, IntentType, CONFIG, INTENTS,
+            USER_NONCE,
         },
     };
 
@@ -2504,7 +2666,9 @@ mod tests {
 
         // Set up user nonce
         let address = Addr::unchecked("user1");
-        USER_NONCE.save(&mut deps.storage, &address, &10u128).unwrap();
+        USER_NONCE
+            .save(&mut deps.storage, &address, &10u128)
+            .unwrap();
 
         // Query the user nonce
         let res = query_get_user_nonce(deps.as_ref(), address.clone()).unwrap();
