@@ -384,6 +384,7 @@ export class BeepContractClient {
     );
   }
 }
+<<<<<<< HEAD
 
 import dotenv from "dotenv"
 
@@ -465,3 +466,5 @@ const example = async () => {
 example().catch(console.error);
 
 
+=======
+>>>>>>> origin
