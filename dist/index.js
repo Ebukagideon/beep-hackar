@@ -1,47 +1,35 @@
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = __importDefault(require("express"));
-const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
-const mongoose_1 = __importDefault(require("mongoose"));
-const ussd_route_1 = require("./ussd.route");
+const event_listener_1 = require("./shared/services/blockchain/event_listener/event_listener");
 dotenv_1.default.config();
-const app = (0, express_1.default)();
-const PORT = process.env.PORT || 5000;
-// Middleware
-app.use((0, cors_1.default)());
-app.use(express_1.default.json());
-app.use(express_1.default.urlencoded({ extended: false }));
-// Sample Route
-app.get("/", (req, res) => {
-    res.send("Hello, Express with TypeScript!");
-});
-const MONGODB_URI = process.env.MONGODB_URI;
-(() => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        mongoose_1.default.connect(MONGODB_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-        });
-        console.log("Connected To Database - Initial Connection");
-    }
-    catch (err) {
-        console.log(`Initial Distribution API Database connection error occurred -`, err);
-    }
-}))();
-app.post('/ussd', ussd_route_1.ussdRoute);
+// const app = express();
+// const PORT = process.env.PORT || 5001;
+// // Middleware
+// app.use(cors());
+// app.use(express.json());
+// app.use(express.urlencoded({ extended: false }));
+// // Sample Route
+// app.get("/", (req: Request, res: Response) => {
+//   res.send("Hello, Express with TypeScript!");
+// });
+// const MONGODB_URI = process.env.MONGODB_URI as string;
+// (async () => {
+//     try {
+//       mongoose.connect(MONGODB_URI, {
+//       } as ConnectOptions);
+//       console.log("Connected To Database - Initial Connection");
+//     } catch (err) {
+//       console.log(
+//         `Initial Distribution API Database connection error occurred -`,
+//         err
+//       );
+//     }
+// })();
+// app.post('/ussd', ussdRoute) 
 // app.post('/ussd', (req, res) => {
 //   // Read the variables sent via POST from our API
 //   const {
@@ -81,7 +69,10 @@ app.post('/ussd', ussd_route_1.ussdRoute);
 //   res.set('Content-Type: text/plain');
 //   res.send(response);
 // });
-// Start Server
-app.listen(PORT, () => {
-    console.log(`🚀 Server is running on http://localhost:${PORT}`);
+(0, event_listener_1.listenForCreateIntentEvent)().catch((err) => {
+    console.error("Error listening for events:", err);
 });
+// Start Server
+// app.listen(PORT, () => {
+//   console.log(`🚀 Server is running on http://localhost:${PORT}`);
+// });

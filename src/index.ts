@@ -3,39 +3,39 @@ import cors from "cors";
 import dotenv from "dotenv";
 import mongoose, { ConnectOptions, MongooseOptions } from "mongoose";
 import { ussdRoute } from "./ussd.route";
+import { listenForCreateIntentEvent } from "./shared/services/blockchain/event_listener/event_listener";
 
 dotenv.config();
 
-const app = express();
-const PORT = process.env.PORT || 5000;
+// const app = express();
+// const PORT = process.env.PORT || 5001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// // Middleware
+// app.use(cors());
+// app.use(express.json());
+// app.use(express.urlencoded({ extended: false }));
 
-// Sample Route
-app.get("/", (req: Request, res: Response) => {
-  res.send("Hello, Express with TypeScript!");
-});
+// // Sample Route
+// app.get("/", (req: Request, res: Response) => {
+//   res.send("Hello, Express with TypeScript!");
+// });
 
-const MONGODB_URI = process.env.MONGODB_URI as string;
-(async () => {
-    try {
-      mongoose.connect(MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-      } as ConnectOptions);
-      console.log("Connected To Database - Initial Connection");
-    } catch (err) {
-      console.log(
-        `Initial Distribution API Database connection error occurred -`,
-        err
-      );
-    }
-})();
+// const MONGODB_URI = process.env.MONGODB_URI as string;
+// (async () => {
+//     try {
+//       mongoose.connect(MONGODB_URI, {
+        
+//       } as ConnectOptions);
+//       console.log("Connected To Database - Initial Connection");
+//     } catch (err) {
+//       console.log(
+//         `Initial Distribution API Database connection error occurred -`,
+//         err
+//       );
+//     }
+// })();
 
-app.post('/ussd', ussdRoute) 
+// app.post('/ussd', ussdRoute) 
 
 // app.post('/ussd', (req, res) => {
 //   // Read the variables sent via POST from our API
@@ -80,7 +80,11 @@ app.post('/ussd', ussdRoute)
 //   res.send(response);
 // });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on http://localhost:${PORT}`);
+listenForCreateIntentEvent().catch((err) => {
+  console.error("Error listening for events:", err);
 });
+
+// Start Server
+// app.listen(PORT, () => {
+//   console.log(`🚀 Server is running on http://localhost:${PORT}`);
+// });
